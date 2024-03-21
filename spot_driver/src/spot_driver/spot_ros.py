@@ -13,6 +13,7 @@ from bosdyn.api.geometry_pb2 import Quaternion, SE2VelocityLimit
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn.client import math_helpers
 from geometry_msgs.msg import Twist, PoseStamped
+from sensor_msgs.msg import Joy
 from google.protobuf.wrappers_pb2 import DoubleValue
 from spot_msgs.msg import BatteryState, BatteryStateArray
 from spot_msgs.msg import BehaviorFaultState
@@ -81,6 +82,7 @@ from std_msgs.msg import Bool
 from std_srvs.srv import Trigger, TriggerResponse, SetBool, SetBoolResponse
 
 from spot_driver.ros_helpers import *
+from spot_driver.teleop_funcs import *
 
 
 class RateLimitedCall:
@@ -138,6 +140,7 @@ class SpotROS:
 
         self.callbacks = {}
         self.spot_wrapper = None
+        self.teleop_funcs = None
         """Dictionary listing what callback to use for what data task"""
         self.callbacks["robot_state"] = self.RobotStateCB
         self.callbacks["metrics"] = self.MetricsCB
@@ -1872,6 +1875,12 @@ class SpotROS:
             self.in_motion_or_idle_pose_cb,
             queue_size=1,
         )
+        rospy.Subscriber(
+            "bluetooth_teleop/joy",
+            Joy,
+            self.teleop_funcs.handle_joy,
+            queue_size=1,
+        )
 
     def initialize_services(self):
         rospy.Service("claim", Trigger, self.handle_claim)
@@ -2043,6 +2052,11 @@ class SpotROS:
         if not self.spot_wrapper.is_valid:
             rospy.logerr("SpotWrapper failed to initialize. Shutting down")
             return
+        
+        self.teleop_funcs = TeleopFuncs(
+            spot_wrapper=self.spot_wrapper,
+            movement_query_fn=self.robot_allowed_to_move,
+        )
 
         self.initialize_publishers()
         self.initialize_subscribers()
