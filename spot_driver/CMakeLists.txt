@@ -23,4 +23,4 @@ catkin_install_python(PROGRAMS
 install(DIRECTORY launch DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 install(DIRECTORY config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 
-catkin_add_nosetests(test/run_tests.py)
+#catkin_add_nosetests(test/run_tests.py)

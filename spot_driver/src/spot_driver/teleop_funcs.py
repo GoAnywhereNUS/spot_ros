@@ -1,6 +1,30 @@
 from sensor_msgs.msg import Joy
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
+from enum import IntEnum
+from threading import Lock
 import time
+
+class LocomotionHint(IntEnum):
+    HINT_AUTO = 1
+    HINT_TROT = 2
+    HINT_SPEED_SELECT_TROT = 3
+    HINT_CRAWL = 4
+    HINT_SPEED_SELECT_CRAWL = 10
+    HINT_AMBLE = 5
+    HINT_SPEED_SELECT_AMBLE = 6
+
+    @classmethod
+    def _missing_(cls, value):
+        return cls.HINT_AUTO
+
+class StairsMode(IntEnum):
+    STAIRS_MODE_OFF = 1
+    STAIRS_MODE_ON = 2
+    STAIRS_MODE_AUTO = 3
+
+    @classmethod
+    def _missing_(cls, value):
+        return cls.STAIRS_MODE_AUTO
 
 class TeleopFuncs:
     """
@@ -13,61 +37,75 @@ class TeleopFuncs:
         self, 
         spot_wrapper, 
         movement_query_fn,
-        refractory_period_secs=0.75,
+        power_on_pause_secs=3,
+        sit_stand_pause_secs=5,
+        toggle_pause_secs=0.5,
     ) -> None:
         self.spot_wrapper = spot_wrapper
         self.movement_query_fn = movement_query_fn
-        self.refractory_period_secs = refractory_period_secs
-        self.time_since_last_trigger_secs = time.time()
-
-        self.enable = False
-        self.toggle_power = False
-        self.toggle_sit_stand = False
-        self.toggle_locomotion_mode = False
-        self.toggle_stairs_mode = False
+        self.power_on_pause_secs = power_on_pause_secs
+        self.sit_stand_pause_secs = sit_stand_pause_secs
+        self.toggle_pause_secs = toggle_pause_secs
+        self.pause = False
+        self.lock = Lock()
 
         self.valid_locomotion_hints = [
-            (spot_command_pb2.LocomotionHint.HINT_AUTO, "AUTO"),
-            (spot_command_pb2.LocomotionHint.HINT_TROT, "TROT"),
-            (spot_command_pb2.LocomotionHint.HINT_SPEED_SELECT_TROT, "TROT WITH STOP"),
-            (spot_command_pb2.LocomotionHint.HINT_CRAWL, "CRAWL"),
-            (spot_command_pb2.LocomotionHint.HINT_SPEED_SELECT_CRAWL, "CRAWL WITH STOP"),
-            (spot_command_pb2.LocomotionHint.HINT_AMBLE, "AMBLE"),
-            (spot_command_pb2.LocomotionHint.HINT_SPEED_SELECT_AMBLE, "AMBLE WITH STOP"),
+            (LocomotionHint.HINT_AUTO, "AUTO"),
+            (LocomotionHint.HINT_TROT, "TROT"),
+            (LocomotionHint.HINT_SPEED_SELECT_TROT, "TROT WITH STOP"),
+            (LocomotionHint.HINT_CRAWL, "CRAWL"),
+            (LocomotionHint.HINT_SPEED_SELECT_CRAWL, "CRAWL WITH STOP"),
+            (LocomotionHint.HINT_AMBLE, "AMBLE"),
+            (LocomotionHint.HINT_SPEED_SELECT_AMBLE, "AMBLE WITH STOP"),
         ]
         self.locomotion_mode_idx = 0
 
         self.valid_stair_hints = [
-            (spot_command_pb2.StairsMode.STAIRS_MODE_OFF, "OFF"),
-            (spot_command_pb2.StairsMode.STAIRS_MODE_ON,  "ON"),
-            (spot_command_pb2.StairsMode.STAIRS_MODE_AUTO, "AUTOSELECT"),
+            (StairsMode.STAIRS_MODE_OFF, "OFF"),
+            (StairsMode.STAIRS_MODE_ON,  "ON"),
+            (StairsMode.STAIRS_MODE_AUTO, "AUTOSELECT"),
         ]
         self.stair_mode_idx = 0
 
     def handle_joy(self, joy_msg):
-        self.enable = (joy_msg.buttons[4] == 1 and joy_msg.buttons[5] == 1)
+        enable = joy_msg.axes[2] < -0.99
+        if enable:
+            with self.lock:
+                print("Enabled:", self.pause)
+            trigger_check = False
+            toggle_check = False
 
-        if self.enable:
-            # Check requests that will trigger robot actions with refractory period.
-            if time.time() - self.time_since_last_trigger_secs > self.refractory_period_secs:
-                self.toggle_power = self.buttons[6] == 1 # Power on/off request
-                self.toggle_sit_stand = self.buttons[7] == 1 # Sit/stand request
+            toggle_power = False
+            toggle_sit_stand = False
+            toggle_locomotion_mode = False
+            toggle_stairs_mode = False
 
-            # Check all other requests with low latency.
-            self.toggle_locomotion_mode = self.buttons[9] == 1 # Locomotion mode change request
-            self.toggle_stairs_mode = self.buttons[10] == 1 # Stairs mode change request
+            with self.lock:
+                # Check requests that will trigger robot actions with refractory period.
+                if not self.pause:
+                    toggle_power = joy_msg.axes[5] < -0.9 # Power on/off request
+                    toggle_sit_stand = joy_msg.axes[7] > 0.9 # Sit/stand request
+                    toggle_locomotion_mode = joy_msg.axes[6] > 0.9 # Locomotion mode change request
+                    toggle_stairs_mode = joy_msg.axes[6] < -0.9 # Stairs mode change request
+                self.pause = (
+                    toggle_power 
+                    or toggle_sit_stand 
+                    or toggle_locomotion_mode 
+                    or toggle_stairs_mode
+                )
 
-            # Handle all mode change requests
-            if self.toggle_power:
+            # Handle mode change requests (only highest priority request)
+            if toggle_power:
                 self._handle_toggle_power()
-            if self.toggle_sit_stand:
+            elif toggle_sit_stand:
                 self._handle_toggle_sit_stand()
-            if self.toggle_locomotion_mode:
+            elif toggle_locomotion_mode:
                 self._handle_toggle_locomotion_mode()
-            if self.toggle_stairs_mode:
+            elif toggle_stairs_mode:
                 self._handle_toggle_stairs_mode()
 
     def _handle_toggle_power(self):
+        print("Received power on/off command")
         if self.spot_wrapper.check_is_powered_on():
             resp = self.spot_wrapper.safe_power_off()
             print("ON --> OFF", resp[0], resp[1])
@@ -75,7 +113,14 @@ class TeleopFuncs:
             resp = self.spot_wrapper.power_on()
             print("OFF --> ON", resp[0], resp[1])
 
+        # BD API is non-blocking, so we add a little wait afterward
+        time.sleep(self.power_on_pause_secs)
+
+        with self.lock:
+            self.pause = False
+
     def _handle_toggle_sit_stand(self):
+        print("Received sit/stand command")
         if not self.movement_query_fn(autonomous_command=False):
             return "Not changing sit/stand. Robot motion not allowed!"
         
@@ -85,12 +130,18 @@ class TeleopFuncs:
         # is safer to try and stand (from a known sitting position,
         # or a standing position) than to try and sit into a position
         # of unknown stability.
-        if self.spot_wrapper.is_sitting():
+        if self.spot_wrapper.is_sitting:
             resp = self.spot_wrapper.stand()
             print("SIT --> STAND:", resp[0], resp[1])
         else:
             resp = self.spot_wrapper.sit()
             print("STAND --> SIT", resp[0], resp[1])
+
+        # BD API is non-blocking, so we add a little wait afterward
+        time.sleep(self.sit_stand_pause_secs)
+
+        with self.lock:
+            self.pause = False
 
     def _handle_toggle_locomotion_mode(self):
         self.locomotion_mode_idx = (self.locomotion_mode_idx + 1) % len(self.valid_locomotion_hints)
@@ -102,6 +153,12 @@ class TeleopFuncs:
             print("Set locomotion mode to: ", msg)
         except Exception as e:
             print("Error setting locomotion mode:{}".format(e))
+        
+        # BD API is non-blocking, so we add a little wait afterward
+        time.sleep(self.toggle_pause_secs)
+
+        with self.lock:
+            self.pause = False
 
     def _handle_toggle_stairs_mode(self):
         self.stair_mode_idx = (self.stair_mode_idx + 1) % len(self.valid_stair_hints)
@@ -113,3 +170,9 @@ class TeleopFuncs:
             print("Set stair mode to: ", msg)
         except Exception as e:
             print("Error setting stair mode:{}".format(e))
+
+        # BD API is non-blocking, so we add a little wait afterward
+        time.sleep(self.toggle_pause_secs)
+
+        with self.lock:
+            self.pause = False

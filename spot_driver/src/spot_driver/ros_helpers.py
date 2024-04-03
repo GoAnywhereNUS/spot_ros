@@ -587,7 +587,7 @@ def GetTFFromState(
                 )
                 tf_time = rospy.Time(local_time.seconds, local_time.nanos)
                 if inverse_target_frame == frame_name:
-                    geo_tform_inversed = SE3Pose.from_obj(
+                    geo_tform_inversed = SE3Pose.from_proto(
                         transform.parent_tform_child
                     ).inverse()
                     new_tf = populateTransformStamped(

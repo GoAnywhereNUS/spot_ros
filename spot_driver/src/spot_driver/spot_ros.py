@@ -1,4 +1,3 @@
-import functools
 import logging
 import math
 import threading
@@ -7,6 +6,12 @@ import time
 import actionlib
 import tf2_geometry_msgs
 import tf2_ros
+
+import sys
+sys.path.append("/data/system/envs/spot/lib/python3.8/site-packages")
+print(sys.path)
+import bosdyn
+
 from bosdyn.api import robot_id_pb2
 from bosdyn.api import trajectory_pb2
 from bosdyn.api.geometry_pb2 import Quaternion, SE2VelocityLimit
@@ -84,6 +89,7 @@ from std_srvs.srv import Trigger, TriggerResponse, SetBool, SetBoolResponse
 from spot_driver.ros_helpers import *
 from spot_driver.teleop_funcs import *
 
+VELOCITY_CMD_DURATION = 0.6 # seconds
 
 class RateLimitedCall:
     """
@@ -1141,7 +1147,7 @@ class SpotROS:
             rospy.logerr("cmd_vel received a message but motion is not allowed.")
             return
 
-        self.spot_wrapper.velocity_cmd(data.linear.x, data.linear.y, data.angular.z)
+        self.spot_wrapper.velocity_cmd(data.linear.x, data.linear.y, data.angular.z, cmd_duration=VELOCITY_CMD_DURATION)
 
     def in_motion_or_idle_pose_cb(self, data):
         """
@@ -1876,7 +1882,7 @@ class SpotROS:
             queue_size=1,
         )
         rospy.Subscriber(
-            "bluetooth_teleop/joy",
+            "/bluetooth_teleop/joy",
             Joy,
             self.teleop_funcs.handle_joy,
             queue_size=1,
