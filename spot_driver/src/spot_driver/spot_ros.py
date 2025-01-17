@@ -66,6 +66,8 @@ from spot_msgs.srv import (
     GraphCloseLoopsRequest,
     GraphCloseLoopsResponse,
 )
+
+from spot_msgs.srv import WalkObject, WalkObjectRequest, WalkObjectResponse
 from spot_msgs.srv import Grasp3d, Grasp3dRequest, Grasp3dResponse
 from spot_msgs.srv import (
     GripperAngleMove,
@@ -1561,6 +1563,16 @@ class SpotROS:
         )
         return Grasp3dResponse(resp[0], resp[1])
 
+    def handle_walk_object(self, srv_data: WalkObjectRequest) -> WalkObjectResponse:
+        """ROS service to walk to an object from the current image observation in order to manipulate it"""
+        #need to create spot_arm.walk_object
+        #WalkObject.srv (it would take string and float to return bool and string )
+        resp = self.spot_wrapper.spot_arm.walk_object(
+            frame=srv_data.frame_name,
+            dist=srv_data.distance,
+        )
+        return WalkObjectResponse(resp[0], resp[1])
+
     ##################################################################
 
     def shutdown(self):
@@ -1948,7 +1960,7 @@ class SpotROS:
         )
         rospy.Service("gripper_pose", HandPose, self.handle_gripper_pose)
         rospy.Service("grasp_3d", Grasp3d, self.handle_grasp_3d)
-
+        rospy.Service("walk_object", WalkObject, self.handle_walk_object)
         # Stop service calls other services so initialise it after them to prevent crashes which can happen if
         # the service is immediately called
         rospy.Service("stop", Trigger, self.handle_stop)
