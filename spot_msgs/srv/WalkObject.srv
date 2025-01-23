@@ -1,6 +1,6 @@
 #ayush attempt
 string frame_name # name of the tf frame
-float64[1] distance # safety distance from the object to be ensured
+float64 distance # safety distance from the object to be ensured
 ---
 bool success
 string message

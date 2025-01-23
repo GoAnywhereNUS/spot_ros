@@ -1252,3 +1252,20 @@ def bosdyn_data_to_image_and_camera_info_msgs(
     camera_info_msg.P[6] = data.source.pinhole.intrinsics.principal_point.y
 
     return image_msg, camera_info_msg
+
+def cv_mouse_callback(event, x, y, flags, param):
+    global g_image_click, g_image_display
+    clone = g_image_display.copy()
+    if event == cv2.EVENT_LBUTTONUP:
+        g_image_click = (x, y)
+    else:
+        # Draw some lines on the image.
+        #print('mouse', x, y)
+        color = (30, 30, 30)
+        thickness = 2
+        image_title = 'Click to walk up to something'
+        height = clone.shape[0]
+        width = clone.shape[1]
+        cv2.line(clone, (0, y), (width, y), color, thickness)
+        cv2.line(clone, (x, 0), (x, height), color, thickness)
+        cv2.imshow(image_title, clone)
