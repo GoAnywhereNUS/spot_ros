@@ -8,8 +8,8 @@ import tf2_geometry_msgs
 import tf2_ros
 
 import sys
-sys.path.append("/data/system/envs/spot/lib/python3.8/site-packages")
-print(sys.path)
+# sys.path.append("/data/system/envs/spot/lib/python3.8/site-packages")
+# print(sys.path)
 import bosdyn
 
 from bosdyn.api import robot_id_pb2
