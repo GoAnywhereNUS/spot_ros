@@ -2,20 +2,22 @@ import logging
 import math
 import threading
 import time
-
+import cv2
 import actionlib
 import tf2_geometry_msgs
 import tf2_ros
 
 import sys
-# sys.path.append("/data/system/envs/spot/lib/python3.8/site-packages")
-# print(sys.path)
+sys.path.append("/data/test_spot_arm/test_spot_env/lib/python3.8/site-packages")
+print(sys.path)
 import bosdyn
 
 from bosdyn.api import robot_id_pb2
 from bosdyn.api import trajectory_pb2
 from bosdyn.api import manipulation_api_pb2
 from bosdyn.api import image_pb2
+from google.protobuf import wrappers_pb2
+
 from bosdyn.api.geometry_pb2 import Quaternion, SE2VelocityLimit
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn.client import math_helpers
@@ -158,6 +160,8 @@ class SpotROS:
         self.callbacks["hand_image"] = self.HandImageCB
         self.callbacks["lidar_points"] = self.PointCloudCB
         self.callbacks["world_objects"] = self.WorldObjectsCB
+        self.g_image_display = None 
+        self.g_image_click = None
 
     def RobotStateCB(self, results):
         """Callback for when the Spot Wrapper gets new robot state data.
@@ -1168,6 +1172,22 @@ class SpotROS:
 
         self._set_in_motion_or_idle_body_pose(data)
 
+    def cv_mouse_callback(self, event, x, y, flags, param):
+        clone = self.g_image_display.copy()
+        if event == cv2.EVENT_LBUTTONUP:
+            self.g_image_click = (x, y)
+        else:
+            # Draw some lines on the image.
+            #print('mouse', x, y)
+            color = (30, 30, 30)
+            thickness = 2
+            image_title = 'Click to walk up to something'
+            height = clone.shape[0]
+            width = clone.shape[1]
+            cv2.line(clone, (0, y), (width, y), color, thickness)
+            cv2.line(clone, (x, 0), (x, height), color, thickness)
+            cv2.imshow(image_title, clone)
+            
     def handle_in_motion_or_idle_body_pose(self, goal: PoseBodyGoal):
         """
         Handle a goal received from the pose body actionserver
@@ -1571,7 +1591,7 @@ class SpotROS:
         #WalkObject.srv (it would take string and float to return bool and string )
         resp = self.walk_object(
             frame=srv_data.frame_name,
-            dist=srv_data.distance,
+            distance=srv_data.distance,
         )
         return WalkObjectResponse(resp[0], resp[1])
     ##################################################################
@@ -1608,24 +1628,23 @@ class SpotROS:
 
                 self.spot_wrapper._logger.info('Click on the object to walk up to... ')
                 image_title = 'Click to walk up to something'
-                cv2namedWindow(image_title)
-                cv2.setMouseCallback(image_title, cv_mouse_callback)
+                cv2.namedWindow(image_title)
+                cv2.setMouseCallback(image_title, self.cv_mouse_callback)
                 
                 #can try making this as an image_helper later
-                global g_image_click, g_image_display
-                g_image_display = img
-                cv2.imshow(image_title, g_image_display)
-                while g_image_click is None:
+                self.g_image_display = img
+                cv2.imshow(image_title, self.g_image_display)
+                while self.g_image_click is None:
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord('q') or key == ord('Q'):
                         # Quit
                         print('"q" pressed, exiting.')
                         exit(0)
 
-                self.spot_wrapper._logger.info('Walking to object at image location (%s, %s)', g_image_click[0],
-                                g_image_click[1])
+                self.spot_wrapper._logger.info('Walking to object at image location (%s, %s)', self.g_image_click[0],
+                                self.g_image_click[1])
 
-                walk_vec = geometry_pb2.Vec2(x=g_image_click[0], y=g_image_click[1])
+                walk_vec = geometry_pb2.Vec2(x=self.g_image_click[0], y=self.g_image_click[1])
 
                 # Optionally populate the offset distance parameter.
                 if distance is None:
@@ -1650,7 +1669,7 @@ class SpotROS:
                 
                 # Get feedback from the robot
                 success = self.spot_wrapper._spot_arm.block_until_manipulation_completes(
-                self.spot_wrapper._spot_arm._manipulation_api_client, cmd_response.cmd_id
+                self.spot_wrapper._spot_arm._manipulation_api_client, cmd_response.manipulation_cmd_id
                 )
 
                 if success:
