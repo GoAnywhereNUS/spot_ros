@@ -2,18 +2,22 @@ import logging
 import math
 import threading
 import time
-
+import cv2
 import actionlib
 import tf2_geometry_msgs
 import tf2_ros
 
 import sys
-sys.path.append("/data/system/envs/spot/lib/python3.8/site-packages")
+sys.path.append("/data/test_spot_arm/test_spot_env/lib/python3.8/site-packages")
 print(sys.path)
 import bosdyn
 
 from bosdyn.api import robot_id_pb2
 from bosdyn.api import trajectory_pb2
+from bosdyn.api import manipulation_api_pb2
+from bosdyn.api import image_pb2
+from google.protobuf import wrappers_pb2
+
 from bosdyn.api.geometry_pb2 import Quaternion, SE2VelocityLimit
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn.client import math_helpers
@@ -66,6 +70,8 @@ from spot_msgs.srv import (
     GraphCloseLoopsRequest,
     GraphCloseLoopsResponse,
 )
+
+from spot_msgs.srv import WalkObject, WalkObjectRequest, WalkObjectResponse
 from spot_msgs.srv import Grasp3d, Grasp3dRequest, Grasp3dResponse
 from spot_msgs.srv import (
     GripperAngleMove,
@@ -154,6 +160,8 @@ class SpotROS:
         self.callbacks["hand_image"] = self.HandImageCB
         self.callbacks["lidar_points"] = self.PointCloudCB
         self.callbacks["world_objects"] = self.WorldObjectsCB
+        self.g_image_display = None 
+        self.g_image_click = None
 
     def RobotStateCB(self, results):
         """Callback for when the Spot Wrapper gets new robot state data.
@@ -1164,6 +1172,22 @@ class SpotROS:
 
         self._set_in_motion_or_idle_body_pose(data)
 
+    def cv_mouse_callback(self, event, x, y, flags, param):
+        clone = self.g_image_display.copy()
+        if event == cv2.EVENT_LBUTTONUP:
+            self.g_image_click = (x, y)
+        else:
+            # Draw some lines on the image.
+            #print('mouse', x, y)
+            color = (30, 30, 30)
+            thickness = 2
+            image_title = 'Click to walk up to something'
+            height = clone.shape[0]
+            width = clone.shape[1]
+            cv2.line(clone, (0, y), (width, y), color, thickness)
+            cv2.line(clone, (x, 0), (x, height), color, thickness)
+            cv2.imshow(image_title, clone)
+            
     def handle_in_motion_or_idle_body_pose(self, goal: PoseBodyGoal):
         """
         Handle a goal received from the pose body actionserver
@@ -1561,6 +1585,105 @@ class SpotROS:
         )
         return Grasp3dResponse(resp[0], resp[1])
 
+    def handle_walk_object(self, srv_data: WalkObjectRequest) -> WalkObjectResponse:
+        """ROS service to walk to an object from the current image observation in order to manipulate it"""
+        #need to create spot_arm.walk_object
+        #WalkObject.srv (it would take string and float to return bool and string )
+        resp = self.walk_object(
+            frame=srv_data.frame_name,
+            distance=srv_data.distance,
+        )
+        return WalkObjectResponse(resp[0], resp[1])
+    ##################################################################
+    
+    def walk_object(self, frame: str, distance: float) -> typing.Tuple[bool, str]:
+        '''
+        Attempt to reach an object from the image based selection of an object
+
+        Args:
+            frame: Frame name of the camera used to get image for obejct selection
+
+        Returns:
+            Bool indicating success, and a message with information.
+        '''
+        try:
+            success, msg = self.spot_wrapper.spot_arm.ensure_arm_power_and_stand()
+            if not success:
+                self.spot_wrapper._logger.info(msg)
+                return False, msg
+            else:
+                self.spot_wrapper._logger.info('Getting the image from: %s', frame)
+                #i avoided thinking about using wrapper
+                self.spot_image_response = self.spot_wrapper._spot_images.get_rgb_image(frame)
+                image = self.spot_image_response
+                if image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_DEPTH_U16:
+                    dtype = np.uint16
+                else:
+                    dtype = np.uint8
+                img = np.fromstring(image.shot.image.data, dtype=dtype)
+                if image.shot.image.format == image_pb2.Image.FORMAT_RAW:
+                    img = img.reshape(image.shot.image.rows, image.shot.image.cols)
+                else:
+                    img = cv2.imdecode(img, -1)
+
+                self.spot_wrapper._logger.info('Click on the object to walk up to... ')
+                image_title = 'Click to walk up to something'
+                cv2.namedWindow(image_title)
+                cv2.setMouseCallback(image_title, self.cv_mouse_callback)
+                
+                #can try making this as an image_helper later
+                self.g_image_display = img
+                cv2.imshow(image_title, self.g_image_display)
+                while self.g_image_click is None:
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q') or key == ord('Q'):
+                        # Quit
+                        print('"q" pressed, exiting.')
+                        exit(0)
+
+                self.spot_wrapper._logger.info('Walking to object at image location (%s, %s)', self.g_image_click[0],
+                                self.g_image_click[1])
+
+                walk_vec = geometry_pb2.Vec2(x=self.g_image_click[0], y=self.g_image_click[1])
+
+                # Optionally populate the offset distance parameter.
+                if distance is None:
+                    offset_distance = None
+                else:
+                    offset_distance = wrappers_pb2.FloatValue(value=distance)
+                
+                # Build the proto
+                walk_to = manipulation_api_pb2.WalkToObjectInImage(
+                    pixel_xy=walk_vec, transforms_snapshot_for_camera=image.shot.transforms_snapshot,
+                    frame_name_image_sensor=image.shot.frame_name_image_sensor,
+                    camera_model=image.source.pinhole, offset_distance=offset_distance)
+                
+                # Ask the robot to pick up the object
+                walk_to_request = manipulation_api_pb2.ManipulationApiRequest(
+                    walk_to_object_in_image=walk_to)
+                
+                # Send the request
+                cmd_response = self.spot_wrapper._spot_arm._manipulation_api_client.manipulation_api_command(
+                    manipulation_api_request=walk_to_request
+                )
+                
+                # Get feedback from the robot
+                success = self.spot_wrapper._spot_arm.block_until_manipulation_completes(
+                self.spot_wrapper._spot_arm._manipulation_api_client, cmd_response.manipulation_cmd_id
+                )
+
+                if success:
+                    msg = "Reached to object successfully"
+                    self.spot_wrapper._logger.info(msg)
+                    return True, msg
+                else:
+                    msg = "Failed to reach the object.."
+                    self.spot_wrapper._logger.info(msg)
+                    return False, msg
+
+        except Exception as e:
+            return False, f"An error occured while trying to reach to the object from frame {frame} \n Error: {e}"
+            
     ##################################################################
 
     def shutdown(self):
@@ -1948,7 +2071,7 @@ class SpotROS:
         )
         rospy.Service("gripper_pose", HandPose, self.handle_gripper_pose)
         rospy.Service("grasp_3d", Grasp3d, self.handle_grasp_3d)
-
+        rospy.Service("walk_object", WalkObject, self.handle_walk_object)
         # Stop service calls other services so initialise it after them to prevent crashes which can happen if
         # the service is immediately called
         rospy.Service("stop", Trigger, self.handle_stop)

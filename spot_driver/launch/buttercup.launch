@@ -1,6 +1,6 @@
 <launch>
   <arg name="username" default="user" />
-  <arg name="password" default="phw8hr7fkelp" />
+  <arg name="password" default="63xhrq3nabmq" />
   <arg name="hostname" default="192.168.50.3" />
   <arg name="estop_timeout" default="9.0"/>
   <arg name="autonomy_enabled" default="true"/>

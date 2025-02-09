@@ -73,6 +73,7 @@ add_service_files(
   SpotCheck.srv
   Grasp3d.srv
   NavigateInit.srv
+  WalkObject.srv
 )
 
 add_action_files(
